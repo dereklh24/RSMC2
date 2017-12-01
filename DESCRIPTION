@@ -1,0 +1,26 @@
+Package: RSMC2
+Type: Package
+Title: What the Package Does in One 'Title Case' Line
+Version: 1.0
+Date: 2017-11-28
+Author: Your Name
+Maintainer: Your Name <your@email.com>
+Description: One paragraph description of what the package does as one or more full sentences.
+License: GPL (>= 2)
+Imports: Rcpp (>= 0.12.12)
+LinkingTo: Rcpp
+Collate:
+    'RcppExports.R'
+    'utilities.R'
+    'cluster_functions.R'
+    'set_up_cluster.R'
+    'particle_node.R'
+    'pmcmc.R'
+    'density_tempered.R'
+    'mpi_functions.R'
+    'psock_functions.R'
+    'smc2_filter.R'
+    'test_model_specification.R'
+Suggests: knitr,
+    rmarkdown
+VignetteBuilder: knitr
