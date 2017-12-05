@@ -55,7 +55,7 @@ transition_lik_f <- function(parameters, particles, weights, t, y1,
     a           <- sample.int(length(prev_w), replace=TRUE, prob=prev_w)
     particles[] <- particles[a, ]
 
-    e_1       <- (y1[t] - parameters['mu']) / exp(particles[, 'h'] * .5)
+    e_1       <- (y1[t-1] - parameters['mu']) / exp(particles[, 'h'] * .5)
     sigma2_1  <- exp(parameters['lomega_h'])
     mean_1    <- particles[, 'h'] + kappa_h * (theta_h - particles[, 'h']) + parameters['psi_h'] * e_1
   }
