@@ -45,23 +45,29 @@ particleSS_cl_obj <-
 #' @examples
 initialize_cluster_environment_mpi <- function(
   cluster_object,
-  particle_mutation_lik_function
+  particle_mutation_lik_function,
+  forecast_mutation_lik_function = NULL
 ) {
   if(!require(Rmpi)) {
     stop("Rmpi needs to be installed and an MPI cluster available to use.")
   }
   
   # The following objects are needed for particle filtering
-  particle_filtering_objects <- c(
+  objects_to_export <- c(
     'particle_mutation_lik_function_c'
   )
   
   particle_mutation_lik_function_c   <- compiler::cmpfun(particle_mutation_lik_function)
+
+  if(!is.null(forecast_mutation_lik_function)) {
+    forecast_mutation_lik_function_c <- compiler::cmpfun(forecast_mutation_lik_function)
+    objects_to_export                <- c(objects_to_export, 'forecast_mutation_lik_function_c')
+  }
   
   message("Exporting data to cluster....")
   export_time <- Sys.time()
   
-  for(object_str in particle_filtering_objects) {
+  for(object_str in objects_to_export) {
     obj     <- list(objname=object_str,obj=get(object_str))
     mpi.bcast.cmd(cmd=.tmpRobj <- mpi.bcast.Robj(comm=1),
                   rank=0, comm=1)
@@ -142,6 +148,33 @@ run_remote_particle_node_mpi <- function(cluster_object, t_cycle, pn_list_name =
     x_sample <- NULL
   }
   return(list(lik = lik, x_sample = x_sample))
+}
+
+run_forecasts_particle_node_mpi <- function(cluster_object, fcast_start, fcast_windows, fcast_extract_n = NULL, pn_list_name = "pn_list") {
+  if(!require(Rmpi)) {
+    stop("Rmpi needs to be installed and an MPI cluster available to use.")
+  }
+
+  mpi.bcast.Robj2slave(fcast_start)
+  mpi.bcast.Robj2slave(fcast_windows)
+  mpi.bcast.Robj2slave(fcast_extract_n)
+  
+  x <- mpi_remote_exec_error_checking({
+    purrr::map(get(pn_list_name, envir = .GlobalEnv), function(pn) {
+      pn$forecast_pf(fcast_start, fcast_windows, fcast_extract_n, forecast_mutation_lik_function_c)
+    })
+  })
+
+  x          <- purrr::flatten(x)
+  fcast_dens <- abind::abind(purrr::map(x, "fcast_dens"), along = 1)
+
+  if(!is.null(fcast_extract_n)) {
+    fcast_sample <- abind::abind(purrr::map(x, "fcast_sample"), along = 1)
+  } else {
+    fcast_sample <- NULL
+  }
+
+  return(list(fcast_dens = fcast_dens, fcast_sample = fcast_sample))
 }
 
 

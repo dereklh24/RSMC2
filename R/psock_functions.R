@@ -15,7 +15,8 @@
 #' @examples
 initialize_cluster_environment_psock <- function(
   cluster_object,
-  particle_mutation_lik_function
+  particle_mutation_lik_function,
+  forecast_mutation_lik_function = NULL
 ) {
 
 
@@ -23,8 +24,14 @@ initialize_cluster_environment_psock <- function(
   export_time <- Sys.time()
   
   particle_mutation_lik_function_c  <- compiler::cmpfun(particle_mutation_lik_function)
+  objects_to_export                 <- 'particle_mutation_lik_function_c'
 
-  parallel::clusterExport(cluster_object, 'particle_mutation_lik_function_c', envir = environment())
+  if(!is.null(forecast_mutation_lik_function)) {
+    forecast_mutation_lik_function_c <- compiler::cmpfun(forecast_mutation_lik_function)
+    objects_to_export                <- c(objects_to_export, 'forecast_mutation_lik_function_c')
+  }
+
+  parallel::clusterExport(cluster_object, objects_to_export, envir = environment())
   
   message("Done exporting data.... (time = ", format(Sys.time() - export_time), ")")
   
@@ -56,7 +63,7 @@ initialize_remote_particle_node_psock <- function(cluster_object, parameters, t_
 }
 
 run_remote_particle_node_psock <- function(cluster_object, t_cycle, pn_list_name = "pn_list", extract_variables = NULL, extract_n = 10) {
-  x <- clusterCall(cl = cluster_object, fun = function(t_cycle, extract_variables, extract_n) {
+  x <- clusterCall(cl = cluster_object, fun = function(t_cycle, extract_variables, extract_n, pn_list_name) {
     purrr::map(get(pn_list_name, envir = .GlobalEnv), function(pn) {
       lik      <- pn$run_pf(t_cycle)
       if(!is.null(extract_variables)) {
@@ -66,7 +73,7 @@ run_remote_particle_node_psock <- function(cluster_object, t_cycle, pn_list_name
       }
       return(list(lik = lik, x_sample = x_sample))
     })
-  }, t_cycle = t_cycle, extract_variables = extract_variables, extract_n = extract_n)
+  }, t_cycle = t_cycle, extract_variables = extract_variables, extract_n = extract_n, pn_list_name = pn_list_name)
   
   x <- purrr::flatten(x)
   lik      <- abind::abind(purrr::map(x, "lik"), along = 1)
@@ -75,16 +82,34 @@ run_remote_particle_node_psock <- function(cluster_object, t_cycle, pn_list_name
   } else {
     x_sample <- NULL
   }
- # browser()
   return(list(lik = lik, x_sample = x_sample))
 }
 
+run_forecasts_particle_node_psock <- function(cluster_object, fcast_start, fcast_windows, fcast_extract_n = NULL, pn_list_name = "pn_list") {
+  x <- parallel::clusterCall(cl = cluster_object, fun = function(fcast_start, fcast_windows, fcast_extract_n, pn_list_name) {
+    purrr::map(get(pn_list_name, envir = .GlobalEnv), function(pn) {
+      pn$forecast_pf(fcast_start, fcast_windows, fcast_extract_n, forecast_mutation_lik_function_c)
+    })
+  }, fcast_start = fcast_start, fcast_windows = fcast_windows, fcast_extract_n = fcast_extract_n, pn_list_name = pn_list_name)
+
+  x          <- purrr::flatten(x)
+  fcast_dens <- abind::abind(purrr::map(x, "fcast_dens"), along = 1)
+
+  if(!is.null(fcast_extract_n)) {
+    fcast_sample <- abind::abind(purrr::map(x, "fcast_sample"), along = 1)
+  } else {
+    fcast_sample <- NULL
+  }
+
+  return(list(fcast_dens = fcast_dens, fcast_sample = fcast_sample))
+}
+
 ### This will be developed into some sort of S3 Methods thing later
-initialize_cluster_environment <- function(cluster_object, particle_mutation_lik_function) {
+initialize_cluster_environment <- function(cluster_object, particle_mutation_lik_function, forecast_mutation_lik_function = NULL) {
   if ("SOCKcluster" %in% class(cluster_object)) {
-    initialize_cluster_environment_psock(cluster_object, particle_mutation_lik_function)
+    initialize_cluster_environment_psock(cluster_object, particle_mutation_lik_function, forecast_mutation_lik_function)
   } else if (cluster_object == "Rmpi") {
-    initialize_cluster_environment_mpi(cluster_object, particle_mutation_lik_function)
+    initialize_cluster_environment_mpi(cluster_object, particle_mutation_lik_function, forecast_mutation_lik_function)
   } else {
     stop("Invalid cluster detected")
   }
@@ -113,6 +138,16 @@ run_remote_particle_node <- function(cluster_object, t_cycle, pn_list_name = "pn
   }
 }
 
+run_forecasts_particle_node <- function(cluster_object, fcast_start, fcast_windows, fcast_extract_n = NULL, pn_list_name = "pn_list") {
+  if ("SOCKcluster" %in% class(cluster_object)) {
+    run_forecasts_particle_node_psock(cluster_object, fcast_start, fcast_windows, fcast_extract_n, pn_list_name)
+  } else if (cluster_object == "Rmpi") {
+    run_forecasts_particle_node_mpi(cluster_object, fcast_start, fcast_windows, fcast_extract_n, pn_list_name)
+  } else {
+    stop("Invalid cluster detected")
+  }
+}
+
 cluster_split <- function(cl, seq) {
   if ("SOCKcluster" %in% class(cl)) {
     parallel::clusterSplit(cl, seq)
@@ -122,3 +157,5 @@ cluster_split <- function(cl, seq) {
     stop("Invalid cluster detected")
   }
 }
+
+

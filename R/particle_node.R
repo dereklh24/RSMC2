@@ -1,7 +1,8 @@
 # particle node R6 class ----
 library(R6)
+#' Class that runs and maintains state of a particle filter
 #' @export
-#' @import R6, zeallot
+#' @import R6
 #' @import data.table
 #' @importFrom compiler cmpfun
 #' @importFrom data.table data.table setkey setDT
@@ -100,6 +101,53 @@ particle_node <- R6Class(
       #if(class(try(self$lik_t[T_range])) == "try-error") stop("sdfasdf")
       return(sum(self$lik_t[T_range]))
     }, 
+    
+    forecast_pf = function(fcast_start, fcast_windows, fcast_extract_n, forecast_mutation_lik_function_c) {
+      current_particles <- self$current_particles
+      weights           <- self$w
+      fcast_range       <- 1:max(fcast_windows)
+      
+
+      fcast_dens_mat    <- matrix(NA_real_, nrow = 1, 
+                                  ncol = length(fcast_windows), 
+                                  dimnames = list(NULL, fcast_windows))
+      
+      if(!is.null(fcast_extract_n)) {
+        fcast_sample_mat  <- matrix(NA_real_, nrow = fcast_extract_n,
+                                    ncol =  length(fcast_windows),
+                                    dimnames = list(NULL, fcast_windows))
+      } else {
+        fcast_sample_mat  <- NULL
+      }
+
+      
+      for (horizon in fcast_range) {
+        fcast_out <- forecast_mutation_lik_function_c(
+          self$parameters, 
+          current_particles,
+          weights, 
+          t = fcast_start,
+          horizon = horizon, 
+          fcast_window = fcast_windows,
+          extract_n = fcast_extract_n)
+      
+      weights           <- NULL
+      current_particles <- fcast_out$particles
+      
+      if(horizon %in% fcast_windows) {
+        fcast_dens_mat[, as.character(horizon)]   <- fcast_out$fcast_dens
+        if(!is.null(fcast_extract_n)) {
+         # stop(length(fcast_out$fcast_sample))
+          fcast_sample_mat[, as.character(horizon)] <- fcast_out$fcast_sample
+        }
+      }
+      
+      }
+      
+    return(list(fcast_dens = fcast_dens_mat, fcast_sample = fcast_sample_mat))
+  },
+      
+      
     
     # Useful for SMC^2 to get a filtered distribution of latent variables without returning all of them
     subsample_latent_var_hist = function(T_range, n_x, extract_var) {
