@@ -19,6 +19,7 @@ Collate:
     'psock_functions.R'
     'smc2_filter.R'
 Suggests: knitr,
-    rmarkdown
+    rmarkdown,
+    skimr
 VignetteBuilder: knitr
 RoxygenNote: 6.0.1
