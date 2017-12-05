@@ -1,0 +1,676 @@
+---
+title: "RSMC2 - Stochastic Volatility Example"
+author: "Derek Hansen"
+date: "`r Sys.Date()`"
+bibliography: stochastic_volatility.bib
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{stochastic_volatility}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+# Setup
+
+This vignette demonstrates the basic usage of the ```RSMC2``` R package for performing fully Bayesian inference on arbitrary non-linear state-space models. The code for the package is currently hosted at https://github.com/dereklh24/RSMC2. ```RSMC2``` currently has two algorithms implemented: the SMC$^2$ algorithm from @Chopin_Jacob_Papas_2013, which facilitates online filtering of parameters and latent states, and the Density-tempered algorithm from @Duan_Fulop_2015. Both of these algorithms involve a particle Metropolis Hastings step from @Andrieu_Doucet_Holenstein_2010.
+
+To demonstrate the package, we will estimate a simple Stochastic Volatility (SV) model on publicly available S&P 500 returns. This model treats the volatility of returns each day as a random variable. The specification is as follows:
+
+$$
+\begin{split}
+y_t &= \mu + \exp(h_t/2)\epsilon^{(1)}_t \\
+h_t &= h_{t-1} + \kappa_h (\theta_h - h_{t-1}) + \sigma_h(\rho_h \epsilon_{t-1}^{(1)} + \sqrt{1 - \rho_h^2}\epsilon^{(2)}_t) \\
+\epsilon^{(1)}_t, \epsilon^{(2)}_t &\sim_{i.i.d} N(0, 1)
+\end{split}
+$$
+where $y_t := \log(\text{price}_t) - \log(\text{price}_{t-1})$. $\mu$, $\theta_h$, $\rho_h$, $\kappa_h$, and $\sigma_h$ are parameters that we will estimate along with each $h_t$. For ease of notation, and to generalize to other models, $\Theta$ will represent all model parameters. Within the actual estimation, we re-parameterize $\sigma_h$ and $\rho_h$ as $\psi_h := \sigma_h \rho_h$ and $\Omega_h := (1 - \rho_h^2) \sigma^2_h$, following @Jacquier_Polson_Rossi_2004.
+
+# Model-specific functions
+
+## Transition and likelihood equation
+
+To run the particle filter inside ```RSMC2```, we need to write an R function that encapsulates the above equation. This function has four inputs: ```parameters```, ```particles```, ```weights```, and ```t```. In this example, ```parameters``` is a particular value of $\Theta$. The ```particles``` and ```weights``` constitute a sample of $h_{t-1}|y_{1:t-1}$. In other words, if we use the exponent ```weights``` to re-sample from ```particles```, this will target the distribution of $h_{t-1}|y_{1:t-1}$.
+
+Meanwhile, the output of this function is a list with three components: ```particles```, ```w```, and ```lik```. Similar to before, ```w``` are the log-weights such that if we re-sample from ```particles``` based on those weights, we will target $h_t | y_{1:t}$. ```lik``` is simply our calculated value of $P(y_t | y_{1:t-1}, \Theta)$, which we use to infer the likelihood of the parameters.
+
+
+
+```{r transition_lik_func, eval=FALSE}
+transition_lik_f <- function(parameters, particles, weights, t, y1,
+                             util = list(
+                               exp_mean = exp_mean,
+                               calc_sampling_weights = calc_sampling_weights)){
+  # Calculate our parameter values from the reparameterization ----
+  sigma2_h             <- parameters['psi_h']^2 + exp(parameters['lomega_h'])
+  rho_h                <- parameters['psi_h'] / sqrt(sigma2_h)
+  kappa_h              <- parameters['kappa_h']
+  theta_h              <- parameters['theta_h']
+  uncond_var           <- sigma2_h/ (2 * kappa_h - kappa_h^2)
+
+  if (t == 1) {
+    # Generate the array of particles at t=1
+    particles <- array(
+      data = NA_real_,
+      dim  = c(nrow(particles), 1),
+      dimnames = list(NULL, c("h"))
+    )
+    mean_1               <- theta_h
+    sigma2_1             <- sigma2_h
+  } else {
+    # Resample the particles based on the weights
+    assertthat::assert_that(!all(is.infinite(weights)))
+
+    # "calc_sampling_weights" is a utility function that takes log-weights and
+    #exponentiates them in a way so that there is at least one
+    # value greater than or equal to 1 to avoid underflows
+    prev_w      <- util$calc_sampling_weights(weights)
+    a           <- sample.int(length(prev_w), replace=TRUE, prob=prev_w)
+    particles[] <- particles[a, ]
+
+    e_1       <- (y1[t] - parameters['mu']) / exp(particles[, 'h'] * .5)
+    sigma2_1  <- exp(parameters['lomega_h'])
+    mean_1    <- particles[, 'h'] +
+      kappa_h * (theta_h - particles[, 'h']) +
+      parameters['psi_h'] * e_1
+  }
+  # Sample particles from transition equation
+  particles[, 'h'] <- mean_1 + rnorm(nrow(particles)) * sqrt(sigma2_1)
+  w                <- dnorm(y1[t] - parameters["mu"],
+                            mean = 0,
+                            sd = exp(particles[, 'h'] * .5),
+                            log = TRUE)
+  if(all(is.infinite(w))) {
+    lik <- -Inf
+  } else {
+    # "exp_mean" is another utility function that takes the
+    # average of the exponent of its inputs and (optionally)
+    # returns the log of that average
+    lik <- util$exp_mean(w, return_log = TRUE)
+}
+  return(list(particles = particles, w = w, lik = lik))
+}
+```
+
+
+As you can see, this function takes more input arguments than required. Specifically, we have ```y1```, which holds our data. To use our function with the package, we can utilize the function ```make_closure``` (part of ```RSMC2```). This function allows us to store a value of ```y1``` with the function, and ensures that this data is properly transferred when we run the algorithm on a ```PSOCK``` or ```MPI``` cluster. Implementing the transfer of data this way is very flexible. We can include additional helper functions, or anything we want for that matter. As long as the final function can run with the four arguments listed above, it will work.
+
+```{r, eval=FALSE}
+transition_lik_cmp <- make_closure(
+  transition_lik_f,
+  y1         = sp500_data_in$y1,
+  util       = list(
+    exp_mean = make_closure(exp_mean),
+    calc_sampling_weights = make_closure(calc_sampling_weights)))
+```
+
+## Priors
+
+Next, Bayesian inference requires that we place priors on our parameters. The input to the algorithm requires an initial sample from this prior distribution (in matrix form) and a function that can evaluate the log-density of the prior distribution (```prior_sampler_dens```). This function takes as input a matrix of parameters, where each row is an sample and each column corresponds to a particular parameter.
+```{r priors, eval=FALSE}
+prior_data <- list(
+  mu      = list(mean = 0, var = 1e-8),
+  theta_h = list(mean = 0, var = 100),
+  kappa_h = list(mean = 1, var = 10),
+  psi_h   = list(mean = 0, var = 10),
+  lomega_h = list(alpha = 2.00005, beta = .0100005)
+)
+
+prior_sampler <- function(n_p, prior_data) {
+  mu       <- rnorm(n_p, prior_data$mu$mean, sqrt(prior_data$mu$var))
+  theta_h  <- rnorm(n_p, prior_data$theta_h$mean, sqrt(prior_data$theta_h$var))
+  kappa_h  <- qnorm(
+    runif(n_p, pnorm(0, prior_data$kappa_h$mean, sqrt(prior_data$kappa_h$var)),
+          pnorm(2, prior_data$kappa_h$mean, sqrt(prior_data$kappa_h$var))),
+    prior_data$kappa_h$mean, sqrt(prior_data$kappa_h$var))
+
+  lomega_h <- log(invgamma::rinvgamma(n_p,
+                                      prior_data$lomega_h$alpha,
+                                      prior_data$lomega_h$beta))
+  psi_h    <- rnorm(n_p, prior_data$psi_h$mean, sqrt(prior_data$psi_h$var))
+
+  x        <- cbind(mu, theta_h, kappa_h, lomega_h, psi_h)
+  return(x)
+}
+
+prior_sampler_dens <- function(params, prior_data) {
+  dens <-
+    dnorm(params[, 'mu'], prior_data$mu$mean,
+          sqrt(prior_data$mu$var), log = TRUE) +
+    dnorm(params[, 'theta_h'], prior_data$theta_h$mean,
+          sqrt(prior_data$theta_h$var), log = TRUE) +
+    dnorm(params[, 'kappa_h'], prior_data$kappa_h$mean,
+          sqrt(prior_data$kappa_h$var), log = TRUE) +
+    dnorm(params[, 'psi_h'], prior_data$kappa_h$mean,
+          sqrt(prior_data$kappa_h$var), log = TRUE) +
+    invgamma::dinvgamma(exp(params[, 'lomega_h']),
+                        prior_data$lomega_h$alpha,
+                        prior_data$lomega_h$beta, log=TRUE) +
+    params[, 'lomega_h']
+
+  return(dens)
+}
+
+prior_sampler <- make_closure(prior_sampler,
+                              prior_data = prior_data)
+prior_density <- make_closure(prior_sampler_dens,
+                              prior_data = prior_data)
+
+
+```
+
+
+## PMCMC Proposal Functions
+
+The last component we need are functions that propose new parameters in a Particle Metropolis-Hastings step as outlined in @Andrieu_Doucet_Holenstein_2010. The proposal function takes as input ```parameters```, ```parameter_features```, ```t``` and ```iter```. The latter two arguments represent the time of data currently being used and the iteration number of the PMCMC step, and are generally not needed.  ```parameters``` is a matrix of the current sample of parameter values, each row a different sample. ```parameter_features``` is generated internally by the ```parameter_features``` function. This provides summary statistics about the first two moments of the distribution of parameters, which are useful in implementing adaptive MCMC.
+
+```{r, eval=FALSE}
+parameter_bounds <-
+  list(
+    lower = list(
+      mu = function(x) -Inf, theta_h = function(x) -Inf, lomega_h = function(x) -Inf,
+      kappa_h = function(x) 0, psi_h = function(x) -Inf),
+    upper = list(
+      mu = function(x) Inf, theta_h = function(x) Inf, lomega_h = function(x) Inf,
+      kappa_h =  function(x) 2, psi_h = function(x) Inf)
+  )
+
+pmcmc_proposal_f <- function(
+  parameters,
+  parameter_features,
+  parameter_bounds,
+  t,
+  iter,
+  #C      = (2.38^2) / 5
+  C       = 1.13288
+) {
+
+  library(abind)
+
+  n_parameters   <- nrow(parameters)
+  V              <- parameter_features$cov * C
+
+  lower          <- parameter_bounds$lower[colnames(parameters)]
+  upper          <- parameter_bounds$upper[colnames(parameters)]
+
+  new_parameters <-
+    lapply(
+      seq_len(n_parameters),
+      function(idx) {
+        r_nltmvtnorm_jump(
+          parameters[idx,],
+          mu =  parameters[idx,],
+          sigma = V,
+          lower = lower,
+          upper = upper
+        )
+      }
+
+    ) %>%
+    abind::abind(along = 0)
+
+  colnames(new_parameters) <- colnames(parameters)
+
+  return(new_parameters)
+
+}
+
+pmcmc_proposal_dens_f <- function(
+  old_parameters,
+  new_parameters,
+  parameter_bounds,
+  parameter_features,
+  t,
+  iter,
+  C       = 1.13288
+) {
+  library(abind)
+  n_parameters   <- nrow(old_parameters)
+  V              <- parameter_features$cov * C
+
+  lower          <- parameter_bounds$lower[colnames(old_parameters)]
+  upper          <- parameter_bounds$upper[colnames(old_parameters)]
+  densities <- lapply(
+    seq_len(n_parameters),
+    function(idx) {
+      d_nltmvtnorm_jump(
+        old_parameters[idx,  ],
+        new_parameters[idx,  ],
+        mu = old_parameters[idx,  ],
+        sigma = V,
+        lower = lower,
+        upper = upper
+      )
+
+    }
+
+  ) %>% abind::abind(along=1)
+  return(densities)
+}
+
+pmcmc_proposal_cmp <-
+  make_closure(pmcmc_proposal_f, parameter_bounds = parameter_bounds)
+
+pmcmc_proposal_dens_cmp <-
+  make_closure(pmcmc_proposal_dens_f, parameter_bounds = parameter_bounds)
+```
+
+## Forecasting functions (optional)
+
+```RSMC2``` also allows for online forecasts to be performed at each $t$. This is useful for evaluating the performance of different state-space models and the predictive distribution of a model at different horizons.
+
+Similar to our ```transition_lik_f``` created earlier, this function is deployed to the cluster, and thus needs to be written as a closure that contains its data. The inputs that are passed to this function are ```parameters```, ```particles```, ```weights```, ```t```, ```horizon```, ```fcast_window```, and ```extract_n```. For a one-step-head forecast (i.e. ```horizon = 1```), ```weights``` will be the same as before. However, for subsequent horizons, ```weights``` will be ```NULL``` (since there is no likelihood to weight by).
+
+```t``` is the latest day of information that we see. ```fcast_window``` is the vector of horizons that we want to record the density of and sample from, and ```horizon``` is the current horizon in the loop.
+
+This function should output a list of three components: ```particles```, ```fcast_dens```, and ```fcast_sample```. The latter two arguments can be ```NULL``` for horizons that we do not record.
+
+
+```{r, eval=FALSE}
+#********************
+# * Forecasting
+#********************
+
+# Note: t is fixed at the last day of available y (so can use info up to and including t). Horizon represents how many days
+# after t we are forecasting
+forecast_f <- function(parameters, particles, weights, t, horizon, fcast_window, extract_n = NULL, y1,
+                             util = list(exp_mean = exp_mean, calc_sampling_weights = calc_sampling_weights)){
+  # Calculate our parameter values from the reparameterization ----
+  sigma2_h             <- parameters['psi_h']^2 + exp(parameters['lomega_h'])
+  rho_h                <- parameters['psi_h'] / sqrt(sigma2_h)
+  kappa_h              <- parameters['kappa_h']
+  theta_h              <- parameters['theta_h']
+  uncond_var           <- sigma2_h/ (2 * kappa_h - kappa_h^2)
+
+  if (t == 1) {
+    # Generate the array of particles
+    particles <- array(
+      data = NA_real_,
+      dim  = c(nrow(particles), 1),
+      dimnames = list(NULL, c("h"))
+    )
+    mean_1               <- theta_h
+    sigma2_1             <- sigma2_h
+  } else {
+    if(!is.null(weights)) {
+      assertthat::assert_that(!all(is.infinite(weights)))
+      prev_w      <- util$calc_sampling_weights(weights)
+      a           <- sample.int(length(prev_w), replace=TRUE, prob=prev_w)
+      particles[] <- particles[a, ]
+    }
+
+    # If it is the first time we are forecasting, create a column for the leverage effect
+    if(horizon == 1) {
+      if(!('e_1' %in% colnames(particles))) {
+        particles <- cbind(particles, e_1 = (y1[t] - parameters["mu"]) / (exp(particles[, 'h'] * 0.5)))
+      } else {
+        particles[, 'e_1'] <- (y1[t] - parameters["mu"]) / (exp(particles[, 'h'] * 0.5))
+      }
+    }
+
+    sigma2_1  <- exp(parameters['lomega_h'])
+    mean_1    <- particles[, 'h'] + kappa_h * (theta_h - particles[, 'h']) + parameters['psi_h'] * particles[, 'e_1']
+  }
+
+  particles[, 'h']   <- mean_1 + rnorm(nrow(particles), mean = 0, sd = sqrt(sigma2_1))
+  particles[, 'e_1'] <- rnorm(nrow(particles))
+
+  # If our current horizon isn't in our window, we can just skip this part to save time
+  if(horizon %in% fcast_window) {
+    # Forecasts
+    current_sd <- exp(particles[, 'h'] * 0.5)
+
+    # Density
+    dens <-
+      util$exp_mean(dnorm(y1[t+horizon] - parameters['mu'], 0, current_sd, log = TRUE),
+                    return_log = TRUE)
+
+    # Samples
+    if(!is.null(extract_n)) {
+      fcast_sample <- parameters['mu'] + sample(particles[, 'e_1'] * current_sd, extract_n, replace=TRUE)
+    } else {
+      fcast_sample <- NULL
+    }
+  } else {
+    dens <- NULL
+    fcast_sample <- NULL
+  }
+
+  return(list(particles = particles, fcast_dens = dens, fcast_sample = fcast_sample))
+}
+
+forecast_f_cmp <- make_closure(forecast_f,
+                                   y1         = sp500_data_in$y1,
+                                   util       = list(exp_mean = make_closure(exp_mean),
+                                                     calc_sampling_weights = make_closure(calc_sampling_weights)))
+
+```
+
+
+# Sample Data
+
+We use the publicly available ```qrmdata``` package to pull the history of the S&P 500 index. We look at the last 2520 observations in the data set, which at the time of writing this vignette is a range from 2005-12-28 to 2015-12-31.
+
+```{r sp500_data, include=FALSE}
+
+#**************************
+#* Generated Data
+#**************************
+
+library(qrmdata)
+data("SP500")
+
+# Convert SP500 to flat tbl
+suppressPackageStartupMessages({
+    library(dplyr)
+    library(xts)
+    library(zoo)
+  })
+
+sp500_data <-
+  tibble(date = as.Date(index(SP500)), close = as.double(SP500)) %>%
+  mutate(lclose = log(close)) %>%
+  mutate(ret = c(NA, diff(lclose))) %>%
+  tail(2520)
+
+sp500_data_in <- select(sp500_data, y1 = ret)
+```
+
+# Running Batch Inference
+
+The first algorithm we will run is from @Duan_Fulop_2015. This uses an increasing sequence of densities constructed from coefficients $\xi_i \in (0,1]$ that temper the likelihood $P(y^{(1)}_{1:t} | \Theta)$. This allows for a controlled pathway from the prior to the posterior. This method is useful when we are only interested in batch inference. In our case, we will use it to bootstrap our online filtering algorithm with 252 days of data (roughly one year).
+
+```{r batch_setup,eval=FALSE}
+n_parameters <- 1170
+n_particles  <- 500
+batch_t     <- 252
+
+end_T <- nrow(sp500_data_in)
+
+#
+set.seed(1231231)
+priors        <- prior_sampler(n_parameters)
+set.seed(NULL)
+```
+
+As you can see here, the function I created to sample from the prior distribution is not required for the algorithm. The user can generate the sample in any way that they choose.
+
+Below, I show how to use the package with Rmpi. The user needs to have an Rmpi configuration loaded in "master" and "slave" mode (by using ```mpi.spawn.Rslaves```, for example). This is the recommended way to use the package.
+
+```{r mpi_setup, eval=FALSE}
+library(Rmpi)
+cl <- "Rmpi"
+mpi.bcast.cmd({devtools::load_all(rsmc2_path)})
+```
+
+Alternatively, the user can use a PSOCK cluster (included in the ```parallel``` package)
+
+```{r,eval=FALSE}
+library(parallel)
+cl <- makePSOCKcluster(19)
+invisible(clusterCall(cl, devtools::load_all, rsmc2_path))
+```
+
+In either case, it is the user's responsibility to make sure that ```RSMC2``` is loaded on the nodes of their cluster.
+
+```{r, eval=FALSE}
+batch_results <- density_tempered_pf(
+  cluster_object              = cl,
+  parameters                  = priors,
+  prior_function              = prior_density,
+  particle_mutation_lik_function = transition_lik_cmp,
+  parameter_proposal_function = pmcmc_proposal_cmp,
+  parameter_proposal_density  = pmcmc_proposal_dens_cmp,
+  n_particles                 = n_particles,
+  end_T                       = batch_t,
+  gamma_threshold             = .5,
+  pmcmc_mh_steps              = 20,
+  grid_steps                  = 1e-13,
+  adaptive_grid               = .01
+)
+```
+
+Most of the parameters here are self-explanatory. ```gamma_threshold``` is the proportion at which ESS needs to drop below before we run the PMCMC step. ```pmcmc_mh_steps``` is the number of M-H steps to take. ```grid_steps``` is the size of the grid search to perform for the next value of $\xi$. ```adaptive_grid``` is a parameter that indicates we will double the size of ```grid_steps``` until the ESS changes by more than ```adaptive_grid```. This speeds up finding the next values of $\xi$.
+
+## Batch results
+
+Before we run the SMC$^2$ online algorithm from @Chopin_Jacob_Papas_2013, we can observe the output of the batch results.
+
+```{r, include=FALSE}
+batch_results <- readRDS(batch_results_path)
+```
+
+```{r}
+str(batch_results)
+```
+
+As you can see, the main output of this algorithm is the ```parameters```. This is the posterior sample of $P(\Theta | y_{1:252})$.
+
+```{r}
+parameter_tbl <- as.data.frame(batch_results$parameters) %>%
+  mutate(sigma2_h = exp(lomega_h) + psi_h^2) %>%
+  mutate(sigma_h = sqrt(sigma2_h)) %>%
+  mutate(rho_h = psi_h / sigma_h) %>%
+  tbl_df
+```
+
+```{r batch_posterior, fig.height = 7, fig.width = 7, fig.align = "center"}
+suppressPackageStartupMessages({
+  library(ggplot2)
+  library(gridExtra)
+  library(purrr)
+})
+parameter_tbl_tall <- tidyr::gather(parameter_tbl, key="parameter", value = "value")
+parameter_densities <- map(c('theta_h', 'kappa_h', 'sigma_h', 'rho_h'),
+                           ~ggplot(filter(parameter_tbl_tall, parameter == .x), aes(x=value)) +
+                             geom_density(fill = "blue", alpha = .6) +
+                             xlab(NULL) + ylab(NULL) +
+                             ggtitle(.x))
+
+grid.arrange(grobs = parameter_densities)
+```
+
+# Online filtering
+
+After initializing our sample with batch inference, we can then plug these results into an online SMC$^2$ filter as described in @Chopin_Jacob_Papas_2013. Our output parameter distribution becomes our input (prior) distribution when adding the rest of the observed data.
+
+```{r online, eval=FALSE}
+# ***************************
+# Online filtering
+# ***************************
+initialize_cluster_environment(cl, transition_lik_cmp, forecast_f_cmp)
+online_results <- smc2_particle_filter(
+  cl,
+  batch_results$parameters,
+  n_particles = 1000,
+  start_T = batch_t + 1,
+  end_T = end_T,
+  particle_mutation_lik_function = transition_lik_cmp,
+  prior_function                 = prior_density,
+  parameter_proposal_function    = pmcmc_proposal_cmp,
+  parameter_proposal_density     = pmcmc_proposal_dens_cmp,
+  extract_variables              = "h", save_steps = 100,
+  forecast_mutation_lik_function = forecast_f_cmp,
+  forecast_settings              =  list(
+        window     = c(1,2,5,10,22),
+        moments    = c(1,2,3,4),
+        quantiles  = c(0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99),
+        forecast_n = 10
+        ),
+  save_prefix = "temp_online_")
+```
+
+We have a few new options in this algorithm. ```extract_variables``` allows us to specify a character vector of latent variables to extract filtered quantile and moments for at each point in time (these can be specified with ```extract_quantiles``` and ```extract_moments```, respectively). ```save_steps``` and ```save_prefix``` allow us to save at intermediate steps of t that are multiples of ```save_steps```. This is useful because the algorithm can take a long time to run.
+
+To add forecasting, we include the function ```forecast_f_cmp``` that we defined above. The ```forecast_settings``` list allows us to define additional settings such as the horizon ```window```, the moments of ```y``` we want returned, the ```quantiles``` of ```y``` we want, and the number of samples to use per parameter.
+
+## Online Results
+
+```{r, include=FALSE}
+online_results <- readRDS(online_results_path)
+```
+
+We have a rich amount of information available in online results. We have the latest parameters, a list of parameters at each point we re-sampled with PMCMC, the Effective Sample Size (ESS) of the parameters at each $t$ (```NA``` for the first 252 values because we started at 253), and the extracted moments and quantiles. The remainder of this vignette will visualize this information.
+
+```{r}
+str(online_results, max.level = 1)
+```
+
+### Posterior density
+
+First, we can visualize the final posterior distribution of each parameter conditional on all 10 years of data.
+```{r}
+parameter_tbl_final <- as.data.frame(online_results$parameters) %>%
+  mutate(sigma2_h = exp(lomega_h) + psi_h^2) %>%
+  mutate(sigma_h = sqrt(sigma2_h)) %>%
+  mutate(rho_h = psi_h / sigma_h) %>%
+  tbl_df
+```
+
+```{r final_posterior, fig.height = 7, fig.width = 7, fig.align = "center"}
+parameter_tbl_tall_final<- tidyr::gather(parameter_tbl_final, key="parameter", value = "value")
+parameter_densities_final <- map(
+  c('theta_h', 'kappa_h', 'sigma_h', 'rho_h'),
+  ~ggplot(filter(parameter_tbl_tall_final, parameter == .x), aes(x=value)) +
+    geom_density(fill = "blue", alpha = .6) +
+    xlab(NULL) + ylab(NULL) + ggtitle(.x))
+
+grid.arrange(grobs = parameter_densities_final)
+```
+
+### Evolution of parameters through time
+
+In addition to just the parameters at the end, we can see the evolution of the filtered posterior of our parameters through time
+
+```{r}
+parameter_tbl_quantiles <-
+  map2_df(online_results$parameter_array, names(online_results$parameter_array),
+       ~as.data.frame(.x) %>%
+        mutate(sigma2_h = exp(lomega_h) + psi_h^2) %>%
+        mutate(sigma_h = sqrt(sigma2_h)) %>%
+        mutate(rho_h = psi_h / sigma_h) %>%
+        tidyr::gather(key="parameter", value = "value") %>%
+        group_by(parameter) %>%
+        summarize(q1=quantile(value, 0.01),
+                   q5=quantile(value, 0.05),
+                   q25=quantile(value, 0.25),
+                   q50=quantile(value, 0.50),
+                   q75=quantile(value, 0.75),
+                   q95=quantile(value, 0.95),
+                   q99=quantile(value, 0.99)) %>%
+        mutate(t = as.integer(.y)))
+
+# reattach dates
+parameter_tbl_quantiles <- inner_join(
+  parameter_tbl_quantiles,
+  mutate(sp500_data, t = 1:2520),
+  by = "t")
+```
+
+
+
+```{r posterior_thru_time, fig.height = 7, fig.width = 7, fig.align = "center"}
+palette <- scale_colour_brewer(type = "seq", palette = "YlGnBu", direction = 1)
+p <- palette$palette(3)
+
+parameter_online_plot <- map(
+  c('theta_h', 'kappa_h', 'sigma_h', 'rho_h'),
+  ~ggplot(filter(parameter_tbl_quantiles, parameter == .x), aes(x=date, y=q50)) +
+    geom_line() +
+    geom_ribbon(aes(ymin=q1, ymax=q99), alpha = 1, fill = p[3]) +
+    geom_ribbon(aes(ymin=q5, ymax=q95), alpha = 1, fill = p[2]) +
+    geom_ribbon(aes(ymin=q25, ymax=q75), alpha = 1, fill = p[1]) +
+    xlab(NULL) + ylab(NULL) +
+    ggtitle(.x))
+
+grid.arrange(grobs = parameter_online_plot)
+```
+
+### Moments of h
+
+We also can plot the filtered moments of $h_t$. At each time $t$, we see the expected value and variance of $h_t$ based only on information up to time $t$.
+
+```{r}
+extracted_moments_df <-
+  inner_join(
+    online_results$extracted_moments_df,
+    mutate(sp500_data, t = 1:2520),
+    by = "t") %>%
+  filter(moment %in% c(1,2)) %>%
+  tidyr::spread(moment, value) %>%
+  mutate(mean = `1`, var = `2` - `1`^2) %>%
+  select(date, mean, var) %>%
+  tidyr::gather(-date, key = "measure", value = "value")
+```
+
+```{r mean_var_h,  fig.height = 7, fig.width = 7, fig.align = "center"}
+
+pal_mean_var_h <- scale_color_brewer(type = "qual",
+                                     palette = "Set1",
+                                     direction = -1)$palette(2)
+
+grid.arrange(
+  grobs = map2(
+    c("mean","var"),
+    pal_mean_var_h,
+    ~ggplot(filter(extracted_moments_df, measure == .x),
+                                 aes(x = date, y = value)) +
+                           geom_line(color = .y) + xlab(NULL) + ylab(NULL) + ggtitle(.x)))
+```
+
+### Quantiles of h
+
+In addition to just the moments of $h_t$, we can also view the full posterior filtered distribution of $h_t$ at each point in time.
+
+```{r, fig.height = 4, fig.width = 6, fig.align = "center"}
+palette <- scale_colour_brewer(type = "seq", palette = "OrRd", direction = 1)
+p <- palette$palette(3)
+
+
+extracted_quantiles_df <-
+  online_results$extracted_quantiles_df %>%
+  inner_join(mutate(sp500_data, t = 1:2520), by = "t") %>%
+  filter(extracted_var == "h")
+
+ggplot(extracted_quantiles_df, aes(x=date)) +
+  geom_ribbon(aes(ymin=`0.01`, ymax=`0.99`),alpha = 1, fill = p[3], color = p[3]) +
+  geom_ribbon(aes(ymin=`0.05`, ymax=`0.95`), alpha = 1, fill = p[2], color = p[2]) +
+  geom_ribbon(aes(ymin=`0.25`, ymax=`0.75`), alpha = 1, fill = p[1], color = p[1]) +
+  xlab(NULL) + ylab(NULL)
+```
+
+## Forecasting Output
+
+We can view both the density of the predictive log-density with respect to the real-return value, as well as the forecasted moments and quantiles. Below, we'll demonstrate the plotting of quantiles of the predictive distribution.
+
+
+### Quantiles
+
+To make the quantiles comparable, we match them up to compare on the day that they are forecasting.
+
+```{r, fig.height = 6, fig.width = 6, fig.align = "center"}
+palette <- scale_colour_brewer(type = "seq", palette = "OrRd", direction = 1)
+p <- palette$palette(3)
+
+
+density_tall <- online_results$fcast_quantiles_df %>%
+  mutate(fcast_t = t+as.integer(as.character(horizon))) %>%
+  inner_join(
+    mutate(sp500_data, t = 1:2520),
+    by = c("fcast_t" = "t")) %>%
+  select(-close, -lclose)
+
+
+ggplot(density_tall, aes(x = date, y = `0.01`)) + geom_line() + facet_grid(horizon~.) +
+    geom_ribbon(aes(ymin=`0.01`, ymax=`0.99`),alpha = 1, fill = p[3], color = p[3]) +
+  geom_ribbon(aes(ymin=`0.05`, ymax=`0.95`), alpha = 1, fill = p[2], color = p[2]) +
+  geom_ribbon(aes(ymin=`0.25`, ymax=`0.75`), alpha = 1, fill = p[1], color = p[1]) +
+  geom_line(aes(y = ret), color = "blue", alpha = .6)
+```
+
+The forecasts seem to do a pretty good job most of the time, although our simple model didn't predict the financial crisis of 2008 in larger horizons.
+
+# Conclusion
+
+This package offers the flexibility to estimate any non-linear state-space model as long as you can write an R function to do so. Future versions will focus on adding features such as the ability to view smoothed distributions of past states.
+
+# References
