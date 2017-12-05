@@ -116,6 +116,7 @@ mh_acceptance <- function(prior_func,
 #' @param pmcmc_mh_steps The number of times the PMCMC kernel should be run.
 #' @param tempering_coefficient_resampling A tempering coefficient to be applied to the resampling weights
 #' @param tempering_coefficient_mh A tempering coefficient to be applied to the M-H acceptance likelihoods
+#' @param end_T 
 #'
 #' @include utilities.R
 #' @include particle_node.R
@@ -135,7 +136,6 @@ pmcmc_step_parallel_standard <- function(
         parameter_proposal_function,
         parameter_proposal_density,
         n_particles,
-        start_T = 1,
         end_T,
         pmcmc_mh_steps                    = 5,
         tempering_coefficient_resampling  = 1,

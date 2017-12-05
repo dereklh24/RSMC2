@@ -53,11 +53,6 @@ density_tempered_pf <- function(
         n_parameters <- nrow(parameters)
 
         # Sanity Checks
-        if(!is.null(max_particles)) {
-            assertthat::assert_that(max_particles > n_particles)
-            #We have to check variance of likelihood estimate if we dynamically change particles
-            check_lik_var <- T
-        }
         # This is a top-level algorithm, so we initialize the cluster
         initialize_cluster_environment(cluster_object, particle_mutation_lik_function)
 
