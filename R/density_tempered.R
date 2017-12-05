@@ -3,6 +3,7 @@
 #'
 #' @param cluster_object A cluster object compatible with SNOW
 #' @param parameters A matrix of parameter samples, with each row a new sample.
+#' @param particle_mutation_lik_function 
 #' @param prior_function A function that evaluates the prior density of the parameter vector
 #' @param parameter_proposal_function For PMCMC; an M-H proposal kernel
 #' @param parameter_proposal_density For PMCMC; the density of the M-H proposal
@@ -12,12 +13,10 @@
 #' @param n_particles The number of particles to use in the filter
 #' @param end_T The number of iterations to go
 #' @param grid_steps The size of the grid search when tempering the likelihood.
-#' @param max_particles A maximum bound for the number of particles. Currently does not do anything. Eventually, this will allow for dynamically altering number of particles
 #' @param check_lik_iter A vector of integers at which to check the likelihood MC error.
 #' @param acceptance_threshold If the mean acceptance drops below this threshold, we automatically check the likelihood and adjust the particles accordingly. Currently not implemented.
 #' @param adaptive_grid If set above zero, the grid step size will double if the change in ESS while searching for Xi is below this threshold. Meant to speed up grid search
 #' @param temp_output_path A string that denotes a file path (appended with 000_rds) to write each intermediate stage to. Useful if there is a crash or something
-#' @param particle_mutation_lik_function 
 #' @param xi_start_value 
 #' @param iter_start_value 
 #'
@@ -26,32 +25,29 @@
 #' 
 #' @include particle_node.R
 #' @include pmcmc.R
-#' @include set_up_cluster.R
-#' @include cluster_functions.R
 #' @include utilities.R
 #' 
 #'
 #'
 density_tempered_pf <- function(
-                                        cluster_object,
-                                        parameters,
-                                        prior_function,
-                                        particle_mutation_lik_function,
-                                        parameter_proposal_function,
-                                        parameter_proposal_density,
-                                        n_particles,
-                                        end_T,
-                                        gamma_threshold     = 0.5,
-                                        pmcmc_mh_steps      = 5,
-                                        grid_steps = 1e-6,
-                                        adaptive_grid = 0,
-                                        max_particles = NULL,
-                                        check_lik_iter = F,
-                                        acceptance_threshold = 0.2,
-                                        pmcmc_step_parallel = pmcmc_step_parallel_standard,
-                                        temp_output_path = NULL,
-					xi_start_value   = 0.0,
-					iter_start_value = 1
+  cluster_object,
+  parameters,
+  particle_mutation_lik_function,
+  prior_function,
+  parameter_proposal_function,
+  parameter_proposal_density,
+  n_particles,
+  end_T,
+  gamma_threshold      = 0.5,
+  pmcmc_mh_steps       = 5,
+  grid_steps           = 1e-6,
+  adaptive_grid        = 0,
+  check_lik_iter       = FALSE,
+  acceptance_threshold = 0.2,
+  pmcmc_step_parallel  = pmcmc_step_parallel_standard,
+  temp_output_path     = NULL,
+  xi_start_value       = 0.0,
+  iter_start_value     = 1
 ) {
         library(magrittr)
         n_parameters <- nrow(parameters)
@@ -67,8 +63,6 @@ density_tempered_pf <- function(
 
         prior_likelihoods <- initialize_remote_particle_node(cluster_object = cluster_object, parameters, 1:end_T, end_T, n_particles)
         
-   #   browser()
-
         #Set up the loop
         iter                <- iter_start_value
         xi                  <- xi_start_value
@@ -140,21 +134,11 @@ density_tempered_pf <- function(
                 likelihood_history                 <- abind(likelihood_history, sampling_likelihood)
                 ess_history                        <- c(ess_history, ess)
 
-                # If our mean acceptance drops below the threshold, and we have specified a max number of particles,
-                # we raise them (NOT IMPLEMENTED YET)
-
-                raise_particles <- (!is.null(max_particles) & mean(acceptance_rates) < acceptance_threshold)
-
                 # We also check likelihood at user-specified iterations ----
                 # This is to diagnose our Monte Carlo error from the particle filter. If we have too
                 # high of an error in our likelihood estimates, then we need to up the number of particles
                 check_lik_var <- (iter %in% check_lik_iter)
-                if(check_lik_var | raise_particles ) {
-                        if(raise_particles) {
-                             message("Low acceptance detected: Checking variance of likelihood")
-}
-
-
+                if(check_lik_var) {
                         message("Checking likelihood variance with estimated mean at iter=", iter, "...")
 
                         test_parameters <- matrix(

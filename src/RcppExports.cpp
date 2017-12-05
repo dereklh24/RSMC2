@@ -5,16 +5,6 @@
 
 using namespace Rcpp;
 
-// rcpp_hello_world
-List rcpp_hello_world();
-RcppExport SEXP _RSMC2_rcpp_hello_world() {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    rcpp_result_gen = Rcpp::wrap(rcpp_hello_world());
-    return rcpp_result_gen;
-END_RCPP
-}
 // weighted_quantile_cpp
 NumericVector weighted_quantile_cpp(NumericVector x, NumericVector w, NumericVector q);
 RcppExport SEXP _RSMC2_weighted_quantile_cpp(SEXP xSEXP, SEXP wSEXP, SEXP qSEXP) {
@@ -30,7 +20,6 @@ END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
-    {"_RSMC2_rcpp_hello_world", (DL_FUNC) &_RSMC2_rcpp_hello_world, 0},
     {"_RSMC2_weighted_quantile_cpp", (DL_FUNC) &_RSMC2_weighted_quantile_cpp, 3},
     {NULL, NULL, 0}
 };

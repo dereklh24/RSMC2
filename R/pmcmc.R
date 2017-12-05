@@ -210,44 +210,6 @@ pmcmc_step_parallel_standard <- function(
                 #Now we run a particle filter using these parameters.
                 filter_time            <- Sys.time()
                 new_log_likelihood <-  initialize_remote_particle_node(cluster_object = cluster_object, new_parameters, 1:t, end_T, n_particles)
-#                 new_parameter_list_nodes <- cluster_split(cluster_object, lapply(seq_len(nrow(new_parameters)), function(idx) new_parameters[idx, ]))
-# 
-#                 if (!("Rmpi" %in% cluster_object)) {
-#                   new_log_likelihood_out   <- cluster_lapply(cl          = cluster_object,
-#                                                              x           = new_parameter_list_nodes,
-#                                                              t_cycle     = 1:t,
-#                                                              n_particles = n_particles,
-#                                                              fun         = function(parameter_list, t_cycle, n_particles) {
-#                                                                for (idx in seq_along(pn_list)) {
-#                                                                  pn_list[[idx]]$parameters <- parameter_list[[idx]]
-#                                                                }
-#                                                                
-#                                                               # pn_list <<- purrr::map(parameter_list, ~particle_node$new(.x, n_particles, end_T, particle_mutation_function_c, likelihood_function_c))
-#                                                                liks <- purrr::map_dbl(pn_list, ~.x$run_pf(t_cycle))
-#                                                                return(list(liks = liks, mem_used = pryr::mem_used()))
-#                                                              }) 
-#                   
-#                 } else {
-#                   mpi.scatter.Robj2slave(new_parameter_list_nodes)
-#                   t_cycle     = 1:t
-#                   mpi.bcast.Robj2slave(t_cycle)
-#                   new_log_likelihood_out <- mpi.remote.exec({
-#                     for (idx in seq_along(pn_list)) {
-#                       pn_list[[idx]]$parameters <- new_parameter_list_nodes[[idx]]
-#                     }
-#                     
-#                     liks <- purrr::map_dbl(pn_list, ~.x$run_pf(t_cycle))
-#                     
-#                     list(liks = liks, mem_used = pryr::mem_used())
-#                   }, simplify = FALSE)
-# 
-#                   if("try-error" %in% purrr::map_chr(new_log_likelihood_out, class)) {
-#                     stop(paste0("Remote error (first encountered is displayed)\\n", purrr::detect(new_log_likelihood_out, ~class(.x) == "try-error")))
-#                   }
-#                 }
-# #browser()
-#                 new_log_likelihood <- abind::abind(purrr::map(new_log_likelihood_out, "liks"), along = 1)
-
                 filter_time          <- Sys.time() - filter_time
                 #Now we decide to accept or reject particles based on their
                 #prior, likelihood, and proposal weights. By default, the
@@ -275,10 +237,8 @@ pmcmc_step_parallel_standard <- function(
 
                 acceptance_rates[i] <- mean(acceptance)
                 message(
-                  "Iteration ", sprintf("%02d", i), ": Acceptance = ", 
-                  format(acceptance_rates[i]), 
-                  " (filter_time = ", format(filter_time, digits = 4))
-                  #"; mem_used = ", format(mem_usage, digits = 4), " MB)")
+                  "Iteration ", sprintf("%02d", i), ": Acceptance = ", sprintf("%0.3f", acceptance_rates[i]), 
+                  " (filter_time = ", sprintf("%0.3f", filter_time), ")")
                 
                # message("Loop time = ", format(Sys.time() - loop_start))
 
@@ -290,7 +250,6 @@ pmcmc_step_parallel_standard <- function(
         
         log_parameter_likelihood <- initialize_remote_particle_node(cluster_object = cluster_object, parameters, 1:t, end_T, n_particles)
         
-        # log_parameter_likelihood[!total_acceptance] <- no_acceptance_liks
         
         # Code to generate nice output about current parameter sample (after rejuvenation)----
         if(require(skimr) & require(tidyr) & require(dplyr)) {
