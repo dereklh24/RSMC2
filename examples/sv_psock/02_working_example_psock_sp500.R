@@ -1,10 +1,8 @@
 # *********************
 # Set RSMC2 path
 #*******************
-rsmc2_path <- "/path/to/RSMC2"
-
-devtools::load_all(rsmc2_path)
-
+#library("RSMC2")
+devtools::load_all()
 #**************************
 #* Generated Data
 #**************************
@@ -300,8 +298,7 @@ forecast_f_cmp <- make_closure(forecast_f,
 
 
 
-n_parameters <- 1170
-# n_parameters <- 19*3
+n_parameters <- 19*3
 n_particles  <- 500
 # Run for one year
 batch_t <- 252
@@ -312,9 +309,10 @@ priors        <- prior_sampler(n_parameters)
 set.seed(NULL)
 
 
-library(Rmpi)
-cl <- "Rmpi"
-mpi.bcast.cmd({devtools::load_all("/path/to/RSMC2")})
+library(parallel)
+cl <- makePSOCKcluster(19)
+#invisible(clusterEvalQ(cl, library("RSMC2")))
+invisible(clusterEvalQ(cl, devtools::load_all()))
 
 batch_results <- density_tempered_pf(
   cluster_object              = cl,
@@ -336,7 +334,6 @@ batch_results <- density_tempered_pf(
 # ***************************
 # Online filtering
 # ***************************
-initialize_cluster_environment(cl, transition_lik_cmp, forecast_f_cmp)
 online_results <- smc2_particle_filter(
   cl,
   batch_results$parameters,
