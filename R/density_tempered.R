@@ -32,7 +32,8 @@
 density_tempered_pf <- function(
   cluster_object,
   parameters,
-  particle_mutation_lik_function,
+  ## particle_mutation_lik_function,
+  pfilter_spec,
   prior_function,
   parameter_proposal_function,
   parameter_proposal_density,
@@ -54,7 +55,7 @@ density_tempered_pf <- function(
 
         # Sanity Checks
         # This is a top-level algorithm, so we initialize the cluster
-        initialize_cluster_environment(cluster_object, particle_mutation_lik_function)
+        initialize_cluster_environment(cluster_object, pfilter_spec)
 
         prior_likelihoods <- initialize_remote_particle_node(cluster_object = cluster_object, parameters, 1:end_T, end_T, n_particles)
         #Set up the loop

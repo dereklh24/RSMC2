@@ -15,29 +15,31 @@
 #' @examples
 initialize_cluster_environment_psock <- function(
   cluster_object,
-  particle_mutation_lik_function,
+  ## particle_mutation_lik_function,
+  pfilter_spec,
   forecast_mutation_lik_function = NULL
 ) {
 
 
   message("Exporting data to cluster....")
   export_time <- Sys.time()
-  
-  particle_mutation_lik_function_c  <- compiler::cmpfun(particle_mutation_lik_function)
-  objects_to_export                 <- 'particle_mutation_lik_function_c'
 
-  if(!is.null(forecast_mutation_lik_function)) {
-    forecast_mutation_lik_function_c <- compiler::cmpfun(forecast_mutation_lik_function)
-    objects_to_export                <- c(objects_to_export, 'forecast_mutation_lik_function_c')
-  }
+  objects_to_export                 <- 'pfilter_spec'
+  if("pomp" %in% class(pfilter_spec)) {
+    ;
+  } else {
+    pfilter_spec  <- compiler::cmpfun(pfilter_spec)
+
+    if(!is.null(forecast_mutation_lik_function)) {
+      forecast_mutation_lik_function_c <- compiler::cmpfun(forecast_mutation_lik_function)
+      objects_to_export                <- c(objects_to_export, 'forecast_mutation_lik_function_c')
+    }
+   }
 
   parallel::clusterExport(cluster_object, objects_to_export, envir = environment())
-  
   message("Done exporting data.... (time = ", format(Sys.time() - export_time), ")")
-  
   #This function is just to setup the environment
   return(NULL)
-  
 }
 
 initialize_remote_particle_node_psock <- function(cluster_object, parameters, t_cycle = NULL, end_T, 
@@ -48,7 +50,7 @@ initialize_remote_particle_node_psock <- function(cluster_object, parameters, t_
   prior_likelihood_out <- parallel::parLapply(cluster_object, parameter_list_nodes, function(parameter_list, n_particles, t_cycle, end_T, save_history, pn_list_name) {
     # Setup particle_node R6 objects
     assign(pn_list_name, 
-           purrr::map(parameter_list, particle_node$new, n_particles, end_T, particle_mutation_lik_function_c,
+           purrr::map(parameter_list, particle_node$new, n_particles, end_T, pfilter_spec,
                       save_history),
            envir = .GlobalEnv)
     
@@ -105,11 +107,11 @@ run_forecasts_particle_node_psock <- function(cluster_object, fcast_start, fcast
 }
 
 ### This will be developed into some sort of S3 Methods thing later
-initialize_cluster_environment <- function(cluster_object, particle_mutation_lik_function, forecast_mutation_lik_function = NULL) {
+initialize_cluster_environment <- function(cluster_object, pfilter_spec, forecast_mutation_lik_function = NULL) {
   if ("SOCKcluster" %in% class(cluster_object)) {
-    initialize_cluster_environment_psock(cluster_object, particle_mutation_lik_function, forecast_mutation_lik_function)
+    initialize_cluster_environment_psock(cluster_object, pfilter_spec, forecast_mutation_lik_function)
   } else if (cluster_object == "Rmpi") {
-    initialize_cluster_environment_mpi(cluster_object, particle_mutation_lik_function, forecast_mutation_lik_function)
+    initialize_cluster_environment_mpi(cluster_object, pfilter_spec, forecast_mutation_lik_function)
   } else {
     stop("Invalid cluster detected")
   }
