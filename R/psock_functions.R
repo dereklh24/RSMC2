@@ -46,13 +46,21 @@ initialize_remote_particle_node_psock <- function(cluster_object, parameters, t_
                                                 n_particles, pn_list_name = "pn_list", save_history = FALSE) {
   # Create list of list of parameters
   parameter_list_nodes <- cluster_split(cluster_object, lapply(seq_len(nrow(parameters)), function(idx) parameters[idx, ]))
-  
+
+  ## browser()
   prior_likelihood_out <- parallel::parLapply(cluster_object, parameter_list_nodes, function(parameter_list, n_particles, t_cycle, end_T, save_history, pn_list_name) {
     # Setup particle_node R6 objects
-    assign(pn_list_name, 
-           purrr::map(parameter_list, particle_node$new, n_particles, end_T, pfilter_spec,
-                      save_history),
-           envir = .GlobalEnv)
+    if("pomp" %in% class(pfilter_spec)) {
+      assign(pn_list_name,
+             purrr::map(parameter_list, pomp_node$new, n_particles, end_T, pfilter_spec,
+                        save_history),
+             envir = .GlobalEnv)
+    } else {
+      assign(pn_list_name,
+            purrr::map(parameter_list, particle_node$new, n_particles, end_T, pfilter_spec,
+                        save_history),
+            envir = .GlobalEnv)
+    }
     
     # Run them in parallel (if supplied with a range)
     if(!is.null(t_cycle)) {

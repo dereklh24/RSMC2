@@ -37,13 +37,14 @@ ret_prev_covtbl <- covariate_table(ret_prev = c(42.0, head(sp500_data$ret, -1)),
 pomp_base <- pomp(data = sp500_data, times = "t", t0 = sp500_data$t[1],
                   rinit    = Csnippet("h = rnorm(theta_h, pow(psi_h,2) + exp(lomega_h));"),
                   rmeasure = Csnippet("ret = mu + rnorm(0, exp(h * 0.5));"),
-                  dmeasure = Csnippet("lik = dnorm(ret, mu, exp(h * 0.5), give_log);"),
+                  dmeasure = Csnippet("double l = dnorm(ret, mu, exp(h * 0.5), give_log);
+                                        lik = (l > -1e30) ? l : -1e30;"),
                   rprocess = discrete_time(
                     step.fun = Csnippet("double sigma2_h = (ret_prev == 42.0) ? pow(psi_h, 2) + exp(lomega_h) : exp(lomega_h);
                                          double e = (ret_prev == 42.0) ? 0.0 : (ret_prev - mu) / exp(h * 0.5);
                                          h = h + kappa_h * (theta_h - h) + psi_h * e;
                                          h += rnorm(0.0, sqrt(sigma2_h));"),
-                    delta.t = 1),
+                   delta.t = 1),
                   paramnames = c("mu", "theta_h", "kappa_h", "lomega_h", "psi_h"),
                   obsnames = c("ret"),
                   statenames = c("h"),
@@ -54,7 +55,13 @@ est_params <-
   c(mu = 0.000130108072007712, theta_h = -9.30001267751156, kappa_h = 0.0275880630220889, 
     lomega_h = -3.80862087929197, psi_h = -0.1997928622724)
 
-pomp_node_test <- pomp_node$new(est_params, 10000, 2520, pomp_base)
+system.time(
+  pomp_node_test <- pomp_node$new(est_params, 10000, 2520, pomp_base)
+)
+
+system.time(
+  pomp_node_test$run_pf(1:2520)
+)
 #**************************
 #* Prior functions----
 #**************************
@@ -201,90 +208,10 @@ pmcmc_proposal_dens_cmp <-
   make_closure(pmcmc_proposal_dens_f, parameter_bounds = parameter_bounds)
 
 
-#********************
-# * Forecasting
-#********************
-
-# Note: t is fixed at the last day of available y (so can use info up to and including t). Horizon represents how many days
-# after t we are forecasting
-forecast_f <- function(parameters, particles, weights, t, horizon, fcast_window, extract_n = NULL, y1,
-                             util = list(exp_mean = exp_mean, calc_sampling_weights = calc_sampling_weights)){
-  # Calculate our parameter values from the reparameterization ----
-  sigma2_h             <- parameters['psi_h']^2 + exp(parameters['lomega_h'])
-  rho_h                <- parameters['psi_h'] / sqrt(sigma2_h)
-  kappa_h              <- parameters['kappa_h']
-  theta_h              <- parameters['theta_h']
-  uncond_var           <- sigma2_h/ (2 * kappa_h - kappa_h^2)
-
-  if (t == 1) {
-    # Generate the array of particles
-    particles <- array(
-      data = NA_real_,
-      dim  = c(nrow(particles), 1),
-      dimnames = list(NULL, c("h"))
-    )
-    mean_1               <- theta_h
-    sigma2_1             <- sigma2_h
-  } else {
-    if(!is.null(weights)) {
-      assertthat::assert_that(!all(is.infinite(weights)))
-      prev_w      <- util$calc_sampling_weights(weights)
-      a           <- sample.int(length(prev_w), replace=TRUE, prob=prev_w)
-      particles[] <- particles[a, ]
-    }
-
-    # If it is the first time we are forecasting, create a column for the leverage effect
-    if(horizon == 1) {
-      if(!('e_1' %in% colnames(particles))) {
-        particles <- cbind(particles, e_1 = (y1[t] - parameters["mu"]) / (exp(particles[, 'h'] * 0.5)))
-      } else {
-        particles[, 'e_1'] <- (y1[t] - parameters["mu"]) / (exp(particles[, 'h'] * 0.5))
-      }
-    }
-
-    sigma2_1  <- exp(parameters['lomega_h'])
-    mean_1    <- particles[, 'h'] + kappa_h * (theta_h - particles[, 'h']) + parameters['psi_h'] * particles[, 'e_1']
-  }
-
-  particles[, 'h']   <- mean_1 + rnorm(nrow(particles), mean = 0, sd = sqrt(sigma2_1))
-  particles[, 'e_1'] <- rnorm(nrow(particles))
-
-  # If our current horizon isn't in our window, we can just skip this part to save time
-  if(horizon %in% fcast_window) {
-    # Forecasts
-    current_sd <- exp(particles[, 'h'] * 0.5)
-
-    # Density
-    dens <-
-      util$exp_mean(dnorm(y1[t+horizon] - parameters['mu'], 0, current_sd, log = TRUE),
-                    return_log = TRUE)
-
-    # Samples
-    if(!is.null(extract_n)) {
-      fcast_sample <- parameters['mu'] + sample(particles[, 'e_1'] * current_sd, extract_n, replace=TRUE)
-    } else {
-      fcast_sample <- NULL
-    }
-  } else {
-    dens <- NULL
-    fcast_sample <- NULL
-  }
-
-  return(list(particles = particles, fcast_dens = dens, fcast_sample = fcast_sample))
-}
-
-forecast_f_cmp <- make_closure(forecast_f,
-                                   y1         = sp500_data_in$y1,
-                                   util       = list(exp_mean = make_closure(exp_mean),
-                                                     calc_sampling_weights = make_closure(calc_sampling_weights)))
-
-
-
-
 n_parameters <- 19*3
 n_particles  <- 500
-# Run for one year
-batch_t <- 252
+# Run for ten years
+batch_t <- 2520
 
 
 set.seed(1231231)
@@ -294,14 +221,14 @@ set.seed(NULL)
 
 library(parallel)
 cl <- makePSOCKcluster(15)
-#invisible(clusterEvalQ(cl, library("RSMC2")))
 invisible(clusterEvalQ(cl, devtools::load_all()))
 
 batch_results <- density_tempered_pf(
   cluster_object              = cl,
   parameters                  = priors,
   prior_function              = prior_density,
-  particle_mutation_lik_function = transition_lik_cmp,
+  ## particle_mutation_lik_function = transition_lik_cmp
+  pfilter_spec                = pomp_base,
   parameter_proposal_function = pmcmc_proposal_cmp,
   parameter_proposal_density  = pmcmc_proposal_dens_cmp,
   n_particles                 = n_particles,
@@ -312,28 +239,4 @@ batch_results <- density_tempered_pf(
   adaptive_grid               = .01,
   check_lik_iter = c(1,2,5)
 )
-
-
-# ***************************
-# Online filtering
-# ***************************
-online_results <- smc2_particle_filter(
-  cl,
-  batch_results$parameters,
-  n_particles = 1000,
-  start_T = batch_t + 1,
-  end_T = end_T,
-  particle_mutation_lik_function = transition_lik_cmp,
-  prior_function                 = prior_density,
-  parameter_proposal_function    = pmcmc_proposal_cmp,
-  parameter_proposal_density     = pmcmc_proposal_dens_cmp,
-  extract_variables              = "h", save_steps = 100,
-  forecast_mutation_lik_function = forecast_f_cmp,
-  forecast_settings              =  list(
-        window     = c(1,2,5,10,22),
-        moments    = c(1,2,3,4),
-        quantiles  = c(0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99),
-        forecast_n = 10
-        ),
-  save_prefix = "temp_online_")
 
