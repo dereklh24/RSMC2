@@ -57,7 +57,6 @@ density_tempered_pf <- function(
         initialize_cluster_environment(cluster_object, particle_mutation_lik_function)
 
         prior_likelihoods <- initialize_remote_particle_node(cluster_object = cluster_object, parameters, 1:end_T, end_T, n_particles)
-        
         #Set up the loop
         iter                <- iter_start_value
         xi                  <- xi_start_value
@@ -87,7 +86,6 @@ density_tempered_pf <- function(
                 xi_diff    <- step_size
                 ess        <- calculate_ess(sampling_likelihood * xi_diff)
                 ess_prev   <- ess
-                
                 while(ess / n_parameters > gamma_threshold & (xi_diff + xi[iter - 1]) < 1) {
                         xi_diff <-  xi_diff + step_size
                         ess     <-  calculate_ess(sampling_likelihood * xi_diff)
@@ -143,7 +141,6 @@ density_tempered_pf <- function(
 
                         #Reattach parameter names if they exist
                         colnames(test_parameters) <- colnames(parameters)
-                        
                         test_log_likelihoods <- initialize_remote_particle_node(cluster_object = cluster_object, parameters, 1:end_T, end_T, n_particles, pn_list_name = "test_list")
                         log_lik_var <- var(test_log_likelihoods)
 

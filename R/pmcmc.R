@@ -167,29 +167,29 @@ pmcmc_step_parallel_standard <- function(
         parameter_features_list$resampled_cov <- cov(parameters)
         
         # Code to generate nice output about current parameter sample (before rejuvenation)----
-        if(require(skimr) & require(tidyr) & require(dplyr)) {
-          options(tibble.width = Inf)
-          parameter_stats <- 
-            skimr::skim(as.data.frame(parameters)) %>%
-            tbl_df
+        ## if(require(skimr) & require(tidyr) & require(dplyr)) {
+        ##   options(tibble.width = Inf)
+        ##   parameter_stats <- 
+        ##     skimr::skim(as.data.frame(parameters)) %>%
+        ##     tbl_df
           
-          parameter_stats$tidy_value <- format(parameter_stats$value, digits = 2)
-          parameter_stats$tidy_value[parameter_stats$stat == "hist"] <- parameter_stats$level[parameter_stats$stat == "hist"]
-          parameter_stats$level[parameter_stats$stat == "hist"] <- ""
+        ##   parameter_stats$tidy_value <- format(parameter_stats$value, digits = 2)
+        ##   parameter_stats$tidy_value[parameter_stats$stat == "hist"] <- parameter_stats$level[parameter_stats$stat == "hist"]
+        ##   parameter_stats$level[parameter_stats$stat == "hist"] <- ""
           
-          parameter_stats_clean <- parameter_stats %>%
-            tidyr::unite(col = stat_level, stat, level, sep = "") %>%
-            dplyr::select(-value) %>%
-            tidyr::spread(key = stat_level, value = tidy_value) %>%
-            select(var, mean = mean.all, sd = sd.all, min = min.all, q25 = `quantile25%`, med= median.all, q75 = `quantile75%`, max = max.all, hist)
-          message("Parameter Summary (before rejuvenation):")
-          print(parameter_stats_clean )
-        } else {
+        ##   parameter_stats_clean <- parameter_stats %>%
+        ##     tidyr::unite(col = stat_level, stat, level, sep = "") %>%
+        ##     dplyr::select(-value) %>%
+        ##     tidyr::spread(key = stat_level, value = tidy_value) %>%
+        ##     select(var, mean = mean.all, sd = sd.all, min = min.all, q25 = `quantile25%`, med= median.all, q75 = `quantile75%`, max = max.all, hist)
+        ##   message("Parameter Summary (before rejuvenation):")
+        ##   print(parameter_stats_clean )
+        ## } else {
           message("Parameter Mean:")
           print(colMeans(parameters))
           message("Covariance Matrix:")
           print(cov(parameters))
-        }
+        ## }
 
         acceptance_rates   <- rep(0.0, pmcmc_mh_steps)
         total_acceptance   <- rep(FALSE, nrow(parameters))
@@ -252,29 +252,29 @@ pmcmc_step_parallel_standard <- function(
         
         
         # Code to generate nice output about current parameter sample (after rejuvenation)----
-        if(require(skimr) & require(tidyr) & require(dplyr)) {
-          options(tibble.width = Inf)
-          parameter_stats <- 
-            skimr::skim(as.data.frame(parameters)) %>%
-            tbl_df
+        ## if(require(skimr) & require(tidyr) & require(dplyr)) {
+        ##   options(tibble.width = Inf)
+        ##   parameter_stats <- 
+        ##     skimr::skim(as.data.frame(parameters)) %>%
+        ##     tbl_df
           
-          parameter_stats$tidy_value <- format(parameter_stats$value, digits = 2)
-          parameter_stats$tidy_value[parameter_stats$stat == "hist"] <- parameter_stats$level[parameter_stats$stat == "hist"]
-          parameter_stats$level[parameter_stats$stat == "hist"] <- ""
+        ##   parameter_stats$tidy_value <- format(parameter_stats$value, digits = 2)
+        ##   parameter_stats$tidy_value[parameter_stats$stat == "hist"] <- parameter_stats$level[parameter_stats$stat == "hist"]
+        ##   parameter_stats$level[parameter_stats$stat == "hist"] <- ""
           
-          parameter_stats_clean <- parameter_stats %>%
-            tidyr::unite(col = stat_level, stat, level, sep = "") %>%
-            dplyr::select(-value) %>%
-            tidyr::spread(key = stat_level, value = tidy_value) %>%
-            select(var, mean = mean.all, sd = sd.all, min = min.all, q25 = `quantile25%`, med= median.all, q75 = `quantile75%`, max = max.all, hist)
-          message("Parameter Summary (after rejuvenation):")
-          print(parameter_stats_clean )
-        } else {
+        ##   parameter_stats_clean <- parameter_stats %>%
+        ##     tidyr::unite(col = stat_level, stat, level, sep = "") %>%
+        ##     dplyr::select(-value) %>%
+        ##     tidyr::spread(key = stat_level, value = tidy_value) %>%
+        ##     select(var, mean = mean.all, sd = sd.all, min = min.all, q25 = `quantile25%`, med= median.all, q75 = `quantile75%`, max = max.all, hist)
+        ##   message("Parameter Summary (after rejuvenation):")
+        ##   print(parameter_stats_clean )
+        ## } else {
           message("Parameter Mean:")
           print(colMeans(parameters))
           message("Covariance Matrix:")
           print(cov(parameters))
-        }
+        ## }
         
         return(list(
                 parameters               = parameters,

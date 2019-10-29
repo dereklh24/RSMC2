@@ -310,7 +310,7 @@ set.seed(NULL)
 
 
 library(parallel)
-cl <- makePSOCKcluster(19)
+cl <- makePSOCKcluster(15)
 #invisible(clusterEvalQ(cl, library("RSMC2")))
 invisible(clusterEvalQ(cl, devtools::load_all()))
 
@@ -354,9 +354,3 @@ online_results <- smc2_particle_filter(
         ),
   save_prefix = "temp_online_")
 
-
-# *********************
-# Wrap up MPI
-# ********************
-mpi.close.Rslaves()
-mpi.quit()

@@ -93,7 +93,7 @@ calc_sampling_weights <- function(x, underflow = TRUE){
 #'
 make_closure <- function(...fun, ...) {
         ...fun_cmp <- compiler::cmpfun(...fun)
-        compiler::cmpfun(purrr::partial(...f = ...fun_cmp, .lazy = FALSE, ...))
+        compiler::cmpfun(purrr::partial(.f = ...fun_cmp, .lazy = FALSE, ...))
 }
 
 
