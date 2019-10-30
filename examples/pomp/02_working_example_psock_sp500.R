@@ -15,15 +15,15 @@ library(dplyr)
 library(xts)
 library(zoo)
 
+end_T <- 252
+
 sp500_data <-
   tibble(date = as.Date(index(SP500)), close = as.double(SP500)) %>%
   mutate(lclose = log(close)) %>%
   mutate(ret = c(NA, diff(lclose))) %>%
-  tail(2520) %>%
-  mutate(t = 1:2520)
+  tail(252) %>%
+  mutate(t = 1:end_T)
 
-## sp500_data_in <- select(sp500_data)
-end_T         <- nrow(sp500_data_in)
 
 #**************************
 #* Likelihood functions----
@@ -211,7 +211,7 @@ pmcmc_proposal_dens_cmp <-
 n_parameters <- 19*3
 n_particles  <- 500
 # Run for ten years
-batch_t <- 2520
+batch_t <- 252
 
 
 set.seed(1231231)
