@@ -83,17 +83,9 @@ density_tempered_pf <- function(
                 # until the effective sample size (ESS) of our sampled parameters drops below a
                 # threshold (i.e. (ESS)/(n_parameters) < gamma_threshold).
                 #xi_diff    <- 0
-                step_size  <- grid_steps
-                xi_diff    <- step_size
-                ess        <- calculate_ess(sampling_likelihood * xi_diff)
-                ess_prev   <- ess
-                while(ess / n_parameters > gamma_threshold & (xi_diff + xi[iter - 1]) < 1) {
-                        xi_diff <-  xi_diff + step_size
-                        ess     <-  calculate_ess(sampling_likelihood * xi_diff)
-                        if(ess_prev - ess < adaptive_grid) {
-                                step_size <- step_size * 2
-                        }
-                }
+                xi_search_out <- xi_grid_search(sampling_likelihood, ess_threshold = gamma_threshold)
+                xi_diff       <- xi_search_out$xi
+                ess           <- xi_search_out$ess
                 xi[iter] <- min(xi_diff + xi[iter - 1], 1.0)
 
                 message(paste0('Xi set to ', format(xi[iter]), ' (difference = ', format(xi_diff), ')'))
@@ -183,4 +175,26 @@ density_tempered_pf <- function(
 
         return(output)
 
+}
+
+xi_grid_search <- function(w, ess_threshold = 0.5, tol = 1e-4, depth=100) {
+xi <- (2.0)^(-1.0);
+for (d in 2:depth) {
+  ess <- calculate_ess(w * xi) / length(w)
+
+  if ((ess_threshold - ess) < 0 && (ess - ess_threshold) < tol) {
+    return(list(xi = xi, ess = ess, depth = d))
+    } else if (ess > ess_threshold) {
+      xi <- xi + (2.)^(-d);
+    } else {
+      xi <- xi - (2.)^(-d);
+}
+}
+
+# If we manage to exit the loop, we give the best answer we can
+
+ess <- calculate_ess(w * xi) / length(w)
+if(ess < ess_threshold) xi <- xi - (2.)^(-depth);
+
+return(list(xi = xi, ess = ess, depth = depth))
 }
