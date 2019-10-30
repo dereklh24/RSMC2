@@ -12,6 +12,7 @@ options(
 )
 set.seed(1332379783L)
 
+devtools::load_all()
 
 ## ----gompertz-init,results="hide"----------------------------------------
 library(pomp)
@@ -176,11 +177,12 @@ batch_results <- density_tempered_pf(
 
 
 
-max_i <- which.max(batch_results$log_likelihood)
+max_i      <- which.max(batch_results$log_likelihood)
 loglik.max <- batch_results$log_likelihood[max_i]
 theta.max  <- batch_results$parameters[max_i, ]
 
 ## Get more accurate estimate of likelihoods
-likmax <- initialize_remote_particle_node(cluster_object = cl, matrix(rep(theta.max, 15), nrow=15, byrow = TRUE, dimnames=list(NULL, names(theta.max))), 1:end_T, end_T, 10000) %>% exp_mean(return_log = TRUE)
+batch_t <- 100
+likmax <- initialize_remote_particle_node(cluster_object = cl, matrix(rep(theta.max, 15), nrow=15, byrow = TRUE, dimnames=list(NULL, names(theta.max))), 1:batch_t, batch_t, 10000) %>% exp_mean(return_log = TRUE)
 
 ## Thus the likelihood is higher than that of true, although less than the result of IF2; this is expected since the algorithm is sampling from the posterior.
