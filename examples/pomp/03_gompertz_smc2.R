@@ -145,12 +145,13 @@ pmcmc_proposal_cmp <-
 pmcmc_proposal_dens_cmp <-
   make_closure(pmcmc_proposal_dens_f, parameter_bounds = parameter_bounds)
 
-n_parameters <- 15*3
+n_parameters <- 15*6
 n_particles  <- 500
 batch_t <- 100
 
-
+set.seed(344)
 priors <- prior_sampler(n_parameters)
+set.seed(NULL)
 
 library(parallel)
 cl <- makePSOCKcluster(15)
