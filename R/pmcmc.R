@@ -154,12 +154,7 @@ pmcmc_step_parallel_standard <- function(
         sampling_weights               <-
                 calc_sampling_weights(tempering_coefficient_resampling * log_parameter_weights)
 
-        parameter_ancestors            <- sample(
-                seq_along(sampling_weights),
-                length(sampling_weights),
-                T,
-                sampling_weights
-                )
+        parameter_ancestors <- residual_resample(sampling_weights)
 
         parameters                     <- parameters[parameter_ancestors, ]
         log_parameter_likelihood       <- log_parameter_likelihood[parameter_ancestors]
@@ -360,4 +355,25 @@ d_nltmvtnorm_jump <- function(x, x_2, mu, sigma, lower, upper, fix = c()) {
   }
   
   return(lik)
+}
+
+residual_resample <- function(sampling_weights) {
+  N      <- length(sampling_weights)
+  mean_w <- mean(sampling_weights)
+  out    <- rep(NA_integer_, N)
+
+  m      <- 1
+
+  for (n in 1:N) {
+    n_fixed <- floor(sampling_weights[n]/mean_w)
+    if (n_fixed > 0) {
+      out[m:(m + n_fixed - 1)] <- n
+      m                        <- m + n_fixed
+      sampling_weights[n]      <- sampling_weights[n] - n_fixed * mean_w
+    }
+  }
+
+  out[m:N] <- sample(seq_len(N), N - m + 1, replace=TRUE, prob=sampling_weights)
+
+  return(out)
 }
